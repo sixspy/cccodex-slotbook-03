@@ -1,4 +1,10 @@
-"""确认入册：占位 → 正式预订，写快照 generation。"""
+"""确认入册：占位 → 正式预订，写快照 generation。
+
+过期拒确认卡 fixtures/expired_confirm_card.json（2026-11-21 封卡）：
+只走甲路径——确认发现 expire_at 已过，正式册零增、占位行零改、
+档期席位零改、不出确认回执，整笔回滚后拒写，拒写与回滚同成败。
+禁止与乙路径（过期影子核销切换）混用。
+"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,7 +14,7 @@ from pydantic import BaseModel
 
 from auth import AuthHeader, require_user, require_writer
 from db import connect, write_audit
-from locks import release, require_lock
+from locks import log_contention, release, require_lock
 
 router = APIRouter(tags=["confirm"])
 
@@ -39,22 +45,26 @@ def confirm_hold(body: ConfirmIn, authorization: AuthHeader = None):
         if not slot:
             raise HTTPException(404, "档期不存在")
         lock_key = f"slot:{slot['code']}"
-        require_lock(conn, lock_key, user)
+        # 档锁互斥：抢不到锁时争用登记独立落库（不随业务事务回滚），业务零写
+        try:
+            require_lock(conn, lock_key, user)
+        except HTTPException:
+            conn.rollback()
+            log_contention(lock_key, user, "confirm_contention", f"hold={body.hold_id}")
+            raise
         try:
             hold = conn.execute("SELECT * FROM holds WHERE id=?", (body.hold_id,)).fetchone()
             if hold["status"] != "占位中":
                 raise HTTPException(409, "占位已非占位中，禁止确认")
-            if hold["expire_at"] < datetime.now().isoformat(timespec="seconds"):
-                conn.execute(
-                    "UPDATE holds SET status='已过期' WHERE id=?", (hold["id"],)
-                )
-                write_audit(conn, user, "hold_expire", str(hold["id"]), {})
-                conn.commit()
-                raise HTTPException(409, "占位已过期")
+            now = datetime.now().isoformat(timespec="seconds")
+            if hold["expire_at"] < now:
+                # 甲路径：过期整笔回滚拒写。本事务内不得有任何残留写入，
+                # 占位行（含 expire_at）、正式册、档期席位一律零改。
+                conn.rollback()
+                raise HTTPException(409, "占位已过期，确认整笔回滚拒写")
             remain = int(slot["capacity"]) - int(slot["booked"])
             if hold["seats"] > remain:
                 raise HTTPException(409, "确认时容量不足，请释放或改候补")
-            now = datetime.now().isoformat(timespec="seconds")
             cur = conn.execute(
                 """INSERT INTO bookings(slot_id,hold_id,party_key,seats,snapshot_gen,status,created_at)
                    VALUES (?,?,?,?,?,?,?)""",

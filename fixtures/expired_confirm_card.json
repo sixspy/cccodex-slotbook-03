@@ -1,0 +1,27 @@
+{
+  "card_id": "expired-confirm-reject-rollback",
+  "sealed_date": "2026-11-21",
+  "title": "过期拒确认卡",
+  "problem": "倒计时归零的过期占位仍可能被晋升为正式单，确认链路必须以过期时刻为准拒确认",
+  "chosen_path": "甲",
+  "path_name": "过期整笔回滚拒写",
+  "rule": "确认发现 expire_at 已过：正式册零增、占位行零改、档期 booked 零改、不出确认回执；整笔回滚后拒写，拒写与回滚同成败",
+  "rejected_path": {
+    "name": "乙：过期影子核销切换（先写过期核销影子再原子标占位已过期，失败则影子作废且占位行零改）",
+    "reason": "正确性口径二选一，禁止混用；本卡只走甲路径"
+  },
+  "invariants": [
+    "过期时刻列 expire_at 原值保留、不被确认链路改写",
+    "确认回执：过期拒写不产生 booking_id",
+    "正式册行数：过期确认前后 bookings 行数一致（零增）",
+    "对账席位：过期确认前后 slots.booked 一致，对账 all_ok 保持 true",
+    "审计条：过期拒确认只允许同生同灭的拒确认审计，回滚后不得残留半截写入"
+  ],
+  "concurrency": "同一过期占位并发确认必须先抢档锁（slot:<code>），后到者只记 contention_log 争用，不写任何业务数据",
+  "forbidden": [
+    "禁止只把倒计时刷成红色等纯前端改动",
+    "禁止甲乙混用",
+    "封卡当天禁止改口换路径"
+  ],
+  "deviation_log": "偏离本卡即记偏航拒写（yaw_reject_write 审计动作）"
+}

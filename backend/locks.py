@@ -16,6 +16,18 @@ class LockIn(BaseModel):
     lock_key: str
 
 
+def log_contention(lock_key: str, actor: str, action: str, detail: str = "") -> None:
+    """争用登记独立事务落库：不随业务事务回滚，只记争用不写业务。"""
+    now = datetime.now().isoformat(timespec="seconds")
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO contention_log(lock_key,actor,action,detail,created_at)
+               VALUES (?,?,?,?,?)""",
+            (lock_key, actor, action, detail, now),
+        )
+        conn.commit()
+
+
 def try_acquire(conn, lock_key: str, holder: str) -> bool:
     now = datetime.now().isoformat(timespec="seconds")
     row = conn.execute(
